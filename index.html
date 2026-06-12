@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Home</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --card: #1a1d27;
+      --accent: #6ea8fe;
+      --text: #e6e6e6;
+      --muted: #9aa0ac;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+    p.sub { color: var(--muted); margin-bottom: 2rem; }
+    nav {
+      display: grid;
+      gap: 1rem;
+      width: 100%;
+      max-width: 480px;
+    }
+    a.tile {
+      display: block;
+      background: var(--card);
+      border: 1px solid #2a2e3a;
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+      color: var(--text);
+      text-decoration: none;
+      transition: border-color .15s, transform .15s;
+    }
+    a.tile:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+    a.tile .title { font-size: 1.15rem; font-weight: 600; }
+    a.tile .desc { color: var(--muted); font-size: .9rem; margin-top: .25rem; }
+    footer { margin-top: 3rem; color: var(--muted); font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <h1>Welcome</h1>
+  <p class="sub">Home page. Pick a destination.</p>
+
+  <nav>
+    <a class="tile" href="hello.html">
+      <div class="title">Hello World</div>
+      <div class="desc">The first page</div>
+    </a>
+  </nav>
+
+  <footer>Add more tiles in <code>index.html</code> as you build pages.</footer>
+</body>
+</html>
