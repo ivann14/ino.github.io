@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Azure Blob Uploader</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e6e6e6;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem;
+    }
+    .card {
+      background: #1a1d27;
+      border: 1px solid #2a2e3a;
+      border-radius: 12px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 640px;
+      margin-top: 2rem;
+    }
+    h1 { font-size: 1.8rem; margin-bottom: 1.5rem; }
+    label { display: block; font-size: .85rem; color: #9aa0ac; margin: 1rem 0 .4rem; }
+    input[type=text], input[type=file] {
+      width: 100%;
+      background: #0f1117;
+      border: 1px solid #2a2e3a;
+      border-radius: 8px;
+      color: #e6e6e6;
+      padding: .7rem .8rem;
+      font-size: .9rem;
+    }
+    button {
+      margin-top: 1.5rem;
+      background: #6ea8fe;
+      color: #0f1117;
+      border: none;
+      border-radius: 8px;
+      padding: .8rem 1.4rem;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+    }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .progress-wrap {
+      margin-top: 1.5rem;
+      background: #0f1117;
+      border-radius: 8px;
+      height: 14px;
+      overflow: hidden;
+      display: none;
+    }
+    .progress-bar { height: 100%; width: 0%; background: #6ea8fe; transition: width .15s; }
+    .status { margin-top: .8rem; font-size: .9rem; color: #9aa0ac; min-height: 1.2em; white-space: pre-wrap; }
+    .status.error { color: #ff7b7b; }
+    .status.ok { color: #7bffb0; }
+    a.back { margin-top: 2rem; color: #6ea8fe; text-decoration: none; }
+    a.back:hover { text-decoration: underline; }
+    code { background: #0f1117; padding: .1rem .3rem; border-radius: 4px; font-size: .8rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Azure Blob Uploader</h1>
+
+    <label for="sas">Container SAS URL (paste the full URL incl. <code>?sp=...&amp;sig=...</code>)</label>
+    <input type="text" id="sas"
+      placeholder="https://ivannsvgdump.blob.core.windows.net/ivann-public-upload?sp=racwl&amp;...">
+
+    <label for="file">File (large files supported, chunked upload)</label>
+    <input type="file" id="file">
+
+    <button id="go">Upload</button>
+
+    <div class="progress-wrap" id="pwrap"><div class="progress-bar" id="pbar"></div></div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <a class="back" href="index.html">&larr; Back to home</a>
+
+  <script>
+    const BLOCK_SIZE = 8 * 1024 * 1024; // 8 MiB blocks
+    const MAX_RETRIES = 3;
+
+    const $ = id => document.getElementById(id);
+    const statusEl = $('status');
+    const pwrap = $('pwrap');
+    const pbar = $('pbar');
+
+    function setStatus(msg, cls) {
+      statusEl.textContent = msg;
+      statusEl.className = 'status' + (cls ? ' ' + cls : '');
+    }
+
+    // Split "base?query" on the first '?'. Returns {base, sas}.
+    function splitSas(url) {
+      const i = url.indexOf('?');
+      if (i === -1) throw new Error('SAS URL has no query string (missing "?sp=...&sig=...").');
+      return { base: url.slice(0, i), sas: url.slice(i + 1) };
+    }
+
+    // Block IDs must be base64 and all the same length. Pad the index to 6 digits.
+    function blockId(index) {
+      return btoa(String(index).padStart(6, '0'));
+    }
+
+    async function putWithRetry(url, opts, label) {
+      let lastErr;
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          const res = await fetch(url, opts);
+          if (!res.ok) {
+            const text = await res.text().catch(() => '');
+            throw new Error(`HTTP ${res.status} ${res.statusText}\n${text.slice(0, 300)}`);
+          }
+          return res;
+        } catch (e) {
+          lastErr = e;
+          if (attempt < MAX_RETRIES) {
+            setStatus(`${label} failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`);
+            await new Promise(r => setTimeout(r, 1000 * attempt));
+          }
+        }
+      }
+      throw lastErr;
+    }
+
+    async function upload() {
+      const sasUrl = $('sas').value.trim();
+      const file = $('file').files[0];
+
+      if (!sasUrl) { setStatus('Paste the SAS URL first.', 'error'); return; }
+      if (!file)   { setStatus('Pick a file first.', 'error'); return; }
+
+      let base, sas;
+      try { ({ base, sas } = splitSas(sasUrl)); }
+      catch (e) { setStatus(e.message, 'error'); return; }
+
+      const blobUrl = `${base}/${encodeURIComponent(file.name)}?${sas}`;
+
+      $('go').disabled = true;
+      pwrap.style.display = 'block';
+      pbar.style.width = '0%';
+
+      const totalBlocks = Math.ceil(file.size / BLOCK_SIZE) || 1;
+      const blockIds = [];
+      let uploaded = 0;
+
+      try {
+        for (let i = 0; i < totalBlocks; i++) {
+          const start = i * BLOCK_SIZE;
+          const chunk = file.slice(start, start + BLOCK_SIZE);
+          const id = blockId(i);
+          blockIds.push(id);
+
+          const url = `${blobUrl}&comp=block&blockid=${encodeURIComponent(id)}`;
+          await putWithRetry(url, { method: 'PUT', body: chunk }, `Block ${i + 1}/${totalBlocks}`);
+
+          uploaded += chunk.size;
+          const pct = Math.round((uploaded / file.size) * 100);
+          pbar.style.width = pct + '%';
+          setStatus(`Uploading block ${i + 1}/${totalBlocks} — ${pct}% (${(uploaded / 1048576).toFixed(1)} / ${(file.size / 1048576).toFixed(1)} MiB)`);
+        }
+
+        // Commit the block list.
+        setStatus('Committing block list...');
+        const xml = `<?xml version="1.0" encoding="utf-8"?><BlockList>${blockIds.map(id => `<Latest>${id}</Latest>`).join('')}</BlockList>`;
+        await putWithRetry(`${blobUrl}&comp=blocklist`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/xml',
+            'x-ms-blob-content-type': file.type || 'application/octet-stream'
+          },
+          body: xml
+        }, 'Commit');
+
+        pbar.style.width = '100%';
+        setStatus(`Done. Uploaded "${file.name}" (${(file.size / 1048576).toFixed(1)} MiB) in ${totalBlocks} block(s).`, 'ok');
+      } catch (e) {
+        setStatus('Upload failed:\n' + e.message + '\n\nIf this is a CORS error, the storage account needs a CORS rule allowing this origin (see repo notes).', 'error');
+      } finally {
+        $('go').disabled = false;
+      }
+    }
+
+    $('go').addEventListener('click', upload);
+  </script>
+</body>
+</html>
