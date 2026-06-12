@@ -70,10 +70,6 @@
   <div class="card">
     <h1>Azure Blob Uploader</h1>
 
-    <label for="sas">Container SAS URL (paste the full URL incl. <code>?sp=...&amp;sig=...</code>)</label>
-    <input type="text" id="sas"
-      placeholder="https://ivannsvgdump.blob.core.windows.net/ivann-public-upload?sp=racwl&amp;...">
-
     <label for="file">File (large files supported, chunked upload)</label>
     <input type="file" id="file">
 
@@ -86,6 +82,9 @@
   <a class="back" href="index.html">&larr; Back to home</a>
 
   <script>
+    // Hardcoded container SAS URL (temporary, expires 2026-06-19).
+    const SAS_URL = 'https://ivannsvgdump.blob.core.windows.net/ivann-public-upload?sp=racwl&st=2026-06-12T07:54:00Z&se=2026-06-19T16:09:00Z&spr=https&sv=2026-02-06&sr=c&sig=ABEY8J%2BEioTrNTNWSdY54xsjpdxFHr7%2FPFNycsZNpDo%3D';
+
     const BLOCK_SIZE = 8 * 1024 * 1024; // 8 MiB blocks
     const MAX_RETRIES = 3;
 
@@ -133,14 +132,11 @@
     }
 
     async function upload() {
-      const sasUrl = $('sas').value.trim();
       const file = $('file').files[0];
-
-      if (!sasUrl) { setStatus('Paste the SAS URL first.', 'error'); return; }
-      if (!file)   { setStatus('Pick a file first.', 'error'); return; }
+      if (!file) { setStatus('Pick a file first.', 'error'); return; }
 
       let base, sas;
-      try { ({ base, sas } = splitSas(sasUrl)); }
+      try { ({ base, sas } = splitSas(SAS_URL)); }
       catch (e) { setStatus(e.message, 'error'); return; }
 
       const blobUrl = `${base}/${encodeURIComponent(file.name)}?${sas}`;
