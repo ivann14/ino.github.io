@@ -70,8 +70,8 @@
   <div class="card">
     <h1>Azure Blob Uploader</h1>
 
-    <label for="file">File (large files supported, chunked upload)</label>
-    <input type="file" id="file">
+    <label for="file">Files (large files supported, chunked upload — select multiple)</label>
+    <input type="file" id="file" multiple>
 
     <button id="go">Upload</button>
 
@@ -131,54 +131,70 @@
       throw lastErr;
     }
 
+    // Upload a single file. onProgress(uploadedBytes) is called as blocks land.
+    async function uploadFile(file, base, sas, prefix, onProgress) {
+      const blobUrl = `${base}/${encodeURIComponent(file.name)}?${sas}`;
+      const totalBlocks = Math.ceil(file.size / BLOCK_SIZE) || 1;
+      const blockIds = [];
+      let uploaded = 0;
+
+      for (let i = 0; i < totalBlocks; i++) {
+        const start = i * BLOCK_SIZE;
+        const chunk = file.slice(start, start + BLOCK_SIZE);
+        const id = blockId(i);
+        blockIds.push(id);
+
+        const url = `${blobUrl}&comp=block&blockid=${encodeURIComponent(id)}`;
+        await putWithRetry(url, { method: 'PUT', body: chunk }, `${prefix} block ${i + 1}/${totalBlocks}`);
+
+        uploaded += chunk.size;
+        onProgress(uploaded);
+        const pct = Math.round((uploaded / file.size) * 100);
+        setStatus(`${prefix} "${file.name}" — block ${i + 1}/${totalBlocks} (${pct}%)`);
+      }
+
+      // Commit the block list.
+      setStatus(`${prefix} committing "${file.name}"...`);
+      const xml = `<?xml version="1.0" encoding="utf-8"?><BlockList>${blockIds.map(id => `<Latest>${id}</Latest>`).join('')}</BlockList>`;
+      await putWithRetry(`${blobUrl}&comp=blocklist`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/xml',
+          'x-ms-blob-content-type': file.type || 'application/octet-stream'
+        },
+        body: xml
+      }, `${prefix} commit`);
+    }
+
     async function upload() {
-      const file = $('file').files[0];
-      if (!file) { setStatus('Pick a file first.', 'error'); return; }
+      const files = Array.from($('file').files);
+      if (!files.length) { setStatus('Pick at least one file first.', 'error'); return; }
 
       let base, sas;
       try { ({ base, sas } = splitSas(SAS_URL)); }
       catch (e) { setStatus(e.message, 'error'); return; }
 
-      const blobUrl = `${base}/${encodeURIComponent(file.name)}?${sas}`;
-
       $('go').disabled = true;
       pwrap.style.display = 'block';
       pbar.style.width = '0%';
 
-      const totalBlocks = Math.ceil(file.size / BLOCK_SIZE) || 1;
-      const blockIds = [];
-      let uploaded = 0;
+      const grandTotal = files.reduce((s, f) => s + f.size, 0) || 1;
+      let doneBytes = 0; // bytes from fully-finished files
 
       try {
-        for (let i = 0; i < totalBlocks; i++) {
-          const start = i * BLOCK_SIZE;
-          const chunk = file.slice(start, start + BLOCK_SIZE);
-          const id = blockId(i);
-          blockIds.push(id);
-
-          const url = `${blobUrl}&comp=block&blockid=${encodeURIComponent(id)}`;
-          await putWithRetry(url, { method: 'PUT', body: chunk }, `Block ${i + 1}/${totalBlocks}`);
-
-          uploaded += chunk.size;
-          const pct = Math.round((uploaded / file.size) * 100);
-          pbar.style.width = pct + '%';
-          setStatus(`Uploading block ${i + 1}/${totalBlocks} — ${pct}% (${(uploaded / 1048576).toFixed(1)} / ${(file.size / 1048576).toFixed(1)} MiB)`);
+        for (let n = 0; n < files.length; n++) {
+          const file = files[n];
+          const prefix = `[${n + 1}/${files.length}]`;
+          await uploadFile(file, base, sas, prefix, (uploadedThisFile) => {
+            const pct = Math.round(((doneBytes + uploadedThisFile) / grandTotal) * 100);
+            pbar.style.width = pct + '%';
+          });
+          doneBytes += file.size;
         }
 
-        // Commit the block list.
-        setStatus('Committing block list...');
-        const xml = `<?xml version="1.0" encoding="utf-8"?><BlockList>${blockIds.map(id => `<Latest>${id}</Latest>`).join('')}</BlockList>`;
-        await putWithRetry(`${blobUrl}&comp=blocklist`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/xml',
-            'x-ms-blob-content-type': file.type || 'application/octet-stream'
-          },
-          body: xml
-        }, 'Commit');
-
         pbar.style.width = '100%';
-        setStatus(`Done. Uploaded "${file.name}" (${(file.size / 1048576).toFixed(1)} MiB) in ${totalBlocks} block(s).`, 'ok');
+        const totalMiB = (grandTotal / 1048576).toFixed(1);
+        setStatus(`Done. Uploaded ${files.length} file(s), ${totalMiB} MiB total.`, 'ok');
       } catch (e) {
         setStatus('Upload failed:\n' + e.message + '\n\nIf this is a CORS error, the storage account needs a CORS rule allowing this origin (see repo notes).', 'error');
       } finally {
